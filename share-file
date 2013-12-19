@@ -1,0 +1,176 @@
+#!/usr/bin/python
+
+# Copyright (c) 2013 Joachim Breitner <mail@joachim-breitner.de>
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+import random
+import BaseHTTPServer
+import SocketServer
+import sys
+import subprocess
+import atexit
+import os
+import urllib
+import cgi
+import string
+import shutil
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+try:
+    import magic
+except ImportError:
+    pass
+
+
+secret_hash = ''.join(random.choice(string.ascii_uppercase + string.digits) for x in range(8))
+
+port = random.randint(10000, 30000)
+
+if len(sys.argv) <= 2:
+    print "Usage: %s host files" % sys.argv[0]
+    sys.exit(1)
+
+host = sys.argv[1]
+
+global files
+files = []
+
+class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
+    def do_GET(self):
+        f = self.send_head()
+        if f:
+            shutil.copyfileobj(f, self.wfile)
+            f.close()
+
+    def do_HEAD(self):
+        f = self.send_head()
+        if f:
+            f.close()
+
+
+    def send_head(self):
+        path = self.path
+        force_downlad = False
+        if path.endswith("?download"):
+            force_downlad = True
+            path = path[:-len("?download")]
+
+        if path == "/"+secret_hash:
+            self.send_response(301)
+            self.send_header("Location", path + "/")
+            self.end_headers()
+            return None
+        if path == "/"+secret_hash+"/":
+            return self.send_file_list()
+        for fobj in files:
+            if path == "/"+secret_hash+"/"+urllib.quote(fobj['basename']):
+                return self.send_file(fobj, force_downlad=force_downlad)
+        self.send_error(404, "File not found")
+
+    def send_file(self, fobj, force_downlad):
+        try:
+            # Always read in binary mode. Opening files in text mode may cause
+            # newline translations, making the actual size of the content
+            # transmitted *less* than the content-length!
+            f = open(fobj['path'], 'rb')
+        except IOError:
+            self.send_error(404, "File not found")
+            return None
+        self.send_response(200)
+        self.send_header("Content-type", fobj['mimetype'])
+        fs = os.fstat(f.fileno())
+        self.send_header("Content-Length", str(fs[6]))
+        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+        if force_downlad:
+            self.send_header("Content-Disposition", "attachment")
+        self.end_headers()
+        return f
+
+    def send_file_list(self):
+        f = StringIO()
+        f.write('<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">')
+        f.write("<html>\n<title>Shared files</title>\n")
+        f.write("<body>\n<h2>Shared files</h2>\n")
+        f.write("<hr>\n<ul>\n")
+        for fobj in files:
+            fullname = fobj['path']
+            displayname = linkname = fobj['basename']
+            f.write('<li>')
+            f.write('<a href="%s">%s</a>\n'
+                    % (urllib.quote(linkname), cgi.escape(displayname)))
+            f.write('<a href="%s?download">(Download)</a>\n'
+                    % urllib.quote(linkname))
+            f.write('</li>')
+        f.write("</ul>\n<hr>\n</body>\n</html>\n")
+        length = f.tell()
+        f.seek(0)
+        self.send_response(200)
+        encoding = sys.getfilesystemencoding()
+        self.send_header("Content-type", "text/html; charset=%s" % encoding)
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+        return f
+
+
+for path in sys.argv[2:]:
+    if magic:
+        # This works with Debian's python-mime, but it seems tha API has changed
+        # in newer versions.
+        m = magic.open(magic.MAGIC_MIME)
+        m.load()
+        mimetype = m.file(path)
+    else:
+        mimetype = "application/octet-stream"
+    # Test if file can be opened, to throw an error before the user tries to
+    # use it.
+    try:
+        open(path)
+    except IOError, e:
+        print "Cannot open \"%s\":\n%s" % (path, e)
+        sys.exit(1)
+    files.append({'path':     path,
+                  'mimetype': mimetype,
+                  'basename': os.path.basename(path)
+                })
+
+httpd = SocketServer.TCPServer(("127.0.0.1", port), Handler)
+
+ssh = subprocess.Popen(["ssh", "-R", "*:%d:127.0.0.1:%d" % (port, port), host, "-N"], stdout=file("/dev/null", "w"))
+
+def kill_ssh():
+    ssh.kill()
+    if ssh.poll():
+        print "SSH client has exited"
+    else:
+        print "SSH client not exited?"
+
+if ssh.poll():
+    print "SSH client has unexpectedly exited"
+    sys.exit(1);
+
+atexit.register(kill_ssh)
+
+if not magic:
+    print "python-magic not installed, no MIME types will be sent."
+
+print "Try http://%s:%d/%s" % (host, port, secret_hash)
+httpd.serve_forever()
