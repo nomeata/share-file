@@ -40,6 +40,12 @@ Screenshots
 
 ![Downloading them in the browser](browser.png)
 
+Alternatives
+------------
+
+After implementing this, I found out about
+[FileTeaSend](https://github.com/brechin/FileTeaSend), a command line client
+for [FileTea](http://filetea.me/). That might be the better tool.
 
 Installation
 ------------
@@ -67,8 +73,6 @@ Bugs, warts and TODOs
    downloads, for example. A more fancy web server could be embedded, but that
    would add dependenies.
  * The HTML output of the file index is plain and ugly; patches welcome.
- * I would not need this if [FileTea had a command line
-   client](https://github.com/elima/FileTea/issues/2). 
  * More problems? Please report them at [the github issue tracker](https://github.com/nomeata/share-file/issues/).
 
 Author
